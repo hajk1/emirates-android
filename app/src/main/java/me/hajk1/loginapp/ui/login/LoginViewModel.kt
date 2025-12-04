@@ -3,22 +3,31 @@ package me.haj1.loginapp.ui.login
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import me.haj1.loginapp.network.NetworkMonitor
 import me.haj1.loginapp.repository.AuthRepository
+import me.haj1.loginapp.util.TimeProvider
 import javax.inject.Inject
 
 
 @HiltViewModel
 class LoginViewModel @Inject constructor(
     private val networkMonitor: NetworkMonitor,
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val timeProvider: TimeProvider
 ) : ViewModel() {
+
+    companion object {
+        const val LOCKOUT_DURATION_MS = 5 * 60 * 1000L
+    }
 
     private val _uiState = MutableStateFlow(LoginUiState())
     val uiState = _uiState.asStateFlow()
+
+    private var lockoutTimerJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -27,12 +36,10 @@ class LoginViewModel @Inject constructor(
                 .onEach { isOnline ->
                     if (!isOnline) {
                         _uiState.update {
-                            it.copy(
-                                errorMessage = "No internet connection",
-                            )
+                            it.copy(errorMessage = "No internet connection")
                         }
                     } else {
-                        _uiState.update { it.copy() }
+                        _uiState.update { it.copy(errorMessage = null) }
                     }
                 }
                 .collect()
@@ -51,17 +58,16 @@ class LoginViewModel @Inject constructor(
         val state = uiState.value
         if (!state.isLoginButtonEnabled || state.isLoading || state.isLockedOut) return
 
-        // Optional: double-check here (defensive)
         val isOnline = networkMonitor.isOnline.replayCache.lastOrNull() ?: false
         if (!isOnline) {
-            _uiState.update { it.copy(errorMessage = "No internet") }
+            _uiState.update { it.copy(errorMessage = "No internet connection") }
             return
         }
-        _uiState.update { it.copy(isLoading = true) }
+        _uiState.update { it.copy(isLoading = true, errorMessage = null) }
         val result = authRepository.login(state.userName, state.password)
         viewModelScope.launch {
             result.fold(
-                onSuccess = { token ->
+                onSuccess = { _ ->
                     authRepository.resetFailureCount()
                     _uiState.update { it.copy(navigateToHome = true, isLoading = false) }
                 },
@@ -69,8 +75,9 @@ class LoginViewModel @Inject constructor(
                     authRepository.incrementFailureCount()
                     val failures = authRepository.getFailureCount()
                     if (failures >= 3) {
-                        val lockoutUntil = System.currentTimeMillis() + 5 * 60 * 1000 // 5 min
+                        val lockoutUntil = timeProvider.currentTimeMillis() + LOCKOUT_DURATION_MS
                         authRepository.setLockoutUntil(lockoutUntil)
+                        _uiState.update { it.copy(isLoading = false) }
                         startLockoutTimer(lockoutUntil)
                     } else {
                         _uiState.update {
@@ -81,16 +88,17 @@ class LoginViewModel @Inject constructor(
                         }
                     }
                 }
-
             )
         }
     }
 
     private fun startLockoutTimer(until: Long) {
-        viewModelScope.launch {
+        lockoutTimerJob?.cancel()
+        lockoutTimerJob = viewModelScope.launch {
             while (true) {
-                val remaining = (until - System.currentTimeMillis()) / 1000
+                val remaining = (until - timeProvider.currentTimeMillis()) / 1000
                 if (remaining <= 0) {
+                    authRepository.resetFailureCount()
                     _uiState.update { it.copy(isLockedOut = false, lockoutSecondsRemaining = 0) }
                     break
                 }
@@ -98,5 +106,10 @@ class LoginViewModel @Inject constructor(
                 delay(1000)
             }
         }
+    }
+
+    // Expose for testing
+    fun cancelLockoutTimer() {
+        lockoutTimerJob?.cancel()
     }
 }

@@ -10,6 +10,8 @@ import me.haj1.loginapp.network.NetworkMonitor
 import me.haj1.loginapp.network.NetworkMonitorImpl
 import me.haj1.loginapp.repository.AuthRepository
 import me.haj1.loginapp.repository.AuthRepositoryImpl
+import me.haj1.loginapp.util.SystemTimeProvider
+import me.haj1.loginapp.util.TimeProvider
 import javax.inject.Singleton
 
 
@@ -31,5 +33,7 @@ class ApplicationDI {
         context, networkMonitor
     )
 
-
+    @Provides
+    @Singleton
+    fun provideTimeProvider(): TimeProvider = SystemTimeProvider()
 }
