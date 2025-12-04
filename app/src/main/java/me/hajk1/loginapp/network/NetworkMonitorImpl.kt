@@ -11,25 +11,36 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.*
 import javax.inject.Inject
 
-
+/**
+ * Implementation of [NetworkMonitor] using Android's ConnectivityManager.
+ *
+ * Uses [callbackFlow] to convert network callbacks into a Flow, then shares
+ * the flow to multiple collectors using [shareIn].
+ *
+ * @property context Application context for accessing system services
+ */
 class NetworkMonitorImpl @Inject constructor(
     private val context: Context
 ) : NetworkMonitor {
+
     /**
-     * We used SharedFlow because we want to share this component for any classes that need to check phone has internet or not
+     * SharedFlow that emits network connectivity status.
+     * - Emits initial connectivity state immediately
+     * - Updates on network available/lost/capabilities changed
+     * - Uses [distinctUntilChanged] to avoid duplicate emissions
+     * - Replays last value to new collectors
      */
     override val isOnline: SharedFlow<Boolean> = callbackFlow {
         val connectivityManager =
             context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-        // Check if network is available and has internet capability
         fun isCurrentlyOnline(): Boolean {
             val network = connectivityManager.activeNetwork ?: return false
             val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
             return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
         }
 
-        // Initial state
+        // Emit initial state
         trySend(isCurrentlyOnline())
 
         val networkCallback = object : ConnectivityManager.NetworkCallback() {
